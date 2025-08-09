@@ -13,7 +13,11 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
-
+            'role' => \App\Http\Middleware\CheckRole::class,
+            'roles' => \App\Http\Middleware\CheckRoles::class,
+            'permission' => \App\Http\Middleware\CheckPermission::class,
+            'quiz.owner' => \App\Http\Middleware\CheckQuizOwnership::class,
+            'attempt.owner' => \App\Http\Middleware\CheckQuizAttemptOwnership::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

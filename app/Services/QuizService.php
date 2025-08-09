@@ -2,29 +2,48 @@
 
 namespace App\Services;
 
-use App\Enums\QuestionType;
-use App\Enums\QuizAttemptStatus;
-use App\Enums\QuizStatus;
-use App\Exceptions\QuizException;
-use App\Models\Question;
-use App\Models\Quiz;
-use App\Models\QuizAttempt;
-use App\Models\QuizAttemptAnswer;
 use App\Repositories\Contracts\QuizRepositoryInterface;
+use App\Models\QuizAttempt;
+use App\Exceptions\QuizException;
+
+use App\Repositories\QuizAttemptRepository;
+use App\Enums\{
+    QuizStatus,
+    QuizAttemptStatus,
+    QuestionType
+};
+
+use App\Models\{
+    Question,
+    Quiz,
+    QuizAttemptAnswer
+};
 
 class QuizService
 {
     protected $quizRepository;
+    protected $attemptRepository;
 
-    public function __construct(QuizRepositoryInterface $quizRepository)
+    public function __construct(
+        QuizRepositoryInterface $quizRepository,
+        QuizAttemptRepository $attemptRepository
+    )
     {
         $this->quizRepository = $quizRepository;
+        $this->attemptRepository = $attemptRepository;
     }
 
     public function createQuiz(array $data, int $teacherId): Quiz
     {
         $data['teacher_id'] = $teacherId;
         $data['status'] = $data['status'] ?? QuizStatus::DRAFT;
+        if (array_key_exists("show_results_immediately", $data)) {
+            $data["show_results_immediately"] = $data["show_results_immediately"] ? "1" : "0";
+        }
+
+        if (array_key_exists("shuffle_questions", $data)) {
+            $data["shuffle_questions"] = $data["shuffle_questions"] ? "1" : "0";
+        }
 
         $quiz = $this->quizRepository->create($data);
 
@@ -37,7 +56,7 @@ class QuizService
 
     public function publishQuiz(int $quizId): Quiz
     {
-        $quiz = $this->quizRepository->find($quizId);
+        $quiz = $this->quizRepository->findOrFail($quizId);
 
         if ($quiz->questions()->count() === 0) {
             throw new QuizException('Testdə ən azı bir sual olmalıdır.');
@@ -50,12 +69,10 @@ class QuizService
     {
         $quiz = $this->quizRepository->getQuizWithQuestions($quizId);
 
-        // Check if quiz is active
         if (!$quiz->isActive()) {
             throw new QuizException('Test aktiv deyil və ya vaxtı keçmişdir.');
         }
 
-        // Check attempt limits
         $existingAttempts = $quiz->attempts()
             ->where('student_id', $studentId)
             ->where('status', QuizAttemptStatus::COMPLETED)
@@ -65,7 +82,6 @@ class QuizService
             throw new QuizException('Maksimum cəhd sayı aşılmışdır.');
         }
 
-        // Check if user has an ongoing attempt
         $ongoingAttempt = $quiz->attempts()
             ->where('student_id', $studentId)
             ->where('status', QuizAttemptStatus::IN_PROGRESS)
@@ -75,7 +91,6 @@ class QuizService
             return $ongoingAttempt;
         }
 
-        // Create new attempt
         return QuizAttempt::create([
             'quiz_id' => $quizId,
             'student_id' => $studentId,
@@ -106,7 +121,7 @@ class QuizService
             [
                 'selected_options' => $answerData['selected_options'] ?? null,
                 'text_answer' => $answerData['text_answer'] ?? null,
-                'is_correct' => $isCorrect ? 1 : 0,
+                'is_correct' => $isCorrect ? '1' : '0',
                 'points_earned' => $pointsEarned,
                 'answered_at' => now()
             ]
@@ -117,7 +132,7 @@ class QuizService
     {
         $attempt = QuizAttempt::with('attemptAnswers')->findOrFail($attemptId);
 
-        $correctAnswers = $attempt->attemptAnswers->where('is_correct', 1)->count();
+        $correctAnswers = $attempt->attemptAnswers->where('is_correct', '1')->count();
         $totalScore = $attempt->attemptAnswers->sum('points_earned');
 
         $attempt->update([
@@ -140,12 +155,12 @@ class QuizService
         $quiz->questions()->sync($questionsWithOrder);
     }
 
-    protected function evaluateAnswer(Question $question, array $answerData): bool|null
+    protected function evaluateAnswer(Question $question, array $answerData): ?bool
     {
         switch ($question->type) {
             case QuestionType::MULTIPLE_CHOICE:
                 $selectedOptions = $answerData['selected_options'] ?? [];
-                $correctOptions = $question->options->where('is_correct', 1)->pluck('id')->toArray();
+                $correctOptions = $question->options->where('is_correct', '1')->pluck('id')->toArray();
 
                 return empty(array_diff($selectedOptions, $correctOptions)) &&
                     empty(array_diff($correctOptions, $selectedOptions));
@@ -156,7 +171,7 @@ class QuizService
 
             case QuestionType::TEXT:
                 $userAnswer = strtolower(trim($answerData['text_answer'] ?? ''));
-                $correctAnswers = $question->options->where('is_correct', 1);
+                $correctAnswers = $question->options->where('is_correct', '1');
 
                 foreach ($correctAnswers as $option) {
                     if (strtolower(trim($option->option_text)) === $userAnswer) {
@@ -166,11 +181,109 @@ class QuizService
                 return false;
 
             case QuestionType::ESSAY:
-                // Essay questions need manual grading
                 return null;
-
             default:
                 return false;
         }
+    }
+
+    public function getQuizzesByTeacher(int $teacherId)
+    {
+        return $this->quizRepository->getQuizzesByTeacher($teacherId);
+    }
+
+    public function getActiveQuizzes()
+    {
+        return $this->quizRepository->getActiveQuizzes();
+    }
+
+    public function getQuizWithQuestions(int $quizId): Quiz
+    {
+        return $this->quizRepository->getQuizWithQuestions($quizId);
+    }
+
+    public function updateQuiz(int $quizId, array $data): Quiz
+    {
+        if (array_key_exists("show_results_immediately", $data)) {
+            $data["show_results_immediately"] = $data["show_results_immediately"] ? "1" : "0";
+        }
+
+        if (array_key_exists("shuffle_questions", $data)) {
+            $data["shuffle_questions"] = $data["shuffle_questions"] ? "1" : "0";
+        }
+
+        $quiz = $this->quizRepository->update($quizId, $data);
+
+        if (isset($data['questions'])) {
+            $this->attachQuestionsToQuiz($quiz, $data['questions']);
+        }
+
+        return $quiz;
+    }
+
+    public function deleteQuiz(int $quizId): bool
+    {
+        return $this->quizRepository->delete($quizId);
+    }
+
+    public function archiveQuiz(int $quizId): Quiz
+    {
+        return $this->quizRepository->update($quizId, ['status' => QuizStatus::ARCHIVED]);
+    }
+
+    public function abandonQuizAttempt(int $attemptId): QuizAttempt
+    {
+        $attempt = QuizAttempt::findOrFail($attemptId);
+
+        $attempt->update([
+            'completed_at' => now(),
+            'status' => QuizAttemptStatus::ABANDONED
+        ]);
+
+        return $attempt;
+    }
+
+    public function getAttemptWithResults(int $attemptId): QuizAttempt
+    {
+        return QuizAttempt::with([
+            'quiz',
+            'student',
+            'attemptAnswers.question.options'
+        ])->findOrFail($attemptId);
+    }
+
+    public function getAttemptStatistics(int $attemptId): array
+    {
+        return $this->attemptRepository->getAttemptStatistics($attemptId);
+    }
+
+    public function getQuizAttempts(int $quizId)
+    {
+        return $this->quizRepository->getQuizAttempts($quizId);
+    }
+
+    public function getQuizStatistics(int $quizId): array
+    {
+        return $this->quizRepository->getQuizStatistics($quizId);
+    }
+
+    public function searchQuizzes(string $search)
+    {
+        return $this->quizRepository->searchQuizzes($search);
+    }
+
+    public function getQuizzesByCategory(int $categoryId)
+    {
+        return $this->quizRepository->getQuizzesByCategory($categoryId);
+    }
+
+    public function getPopularQuizzes(int $limit = 10)
+    {
+        return $this->quizRepository->getPopularQuizzes($limit);
+    }
+
+    public function getDraftQuizzes()
+    {
+        return $this->quizRepository->getDraftQuizzes();
     }
 }

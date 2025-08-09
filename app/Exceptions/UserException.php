@@ -5,12 +5,12 @@ namespace App\Exceptions;
 use Exception;
 use Symfony\Component\HttpFoundation\Response;
 
-class QuizException extends Exception
+class UserException extends Exception
 {
     protected $message;
     protected $code;
 
-    public function __construct($message = "Quiz əməliyyatında səhv baş verdi", $code = Response::HTTP_BAD_REQUEST)
+    public function __construct($message = "İstifadəçi əməliyyatında səhv baş verdi", $code = Response::HTTP_BAD_REQUEST)
     {
         $this->message = $message;
         $this->code = $code;
@@ -21,7 +21,8 @@ class QuizException extends Exception
     {
         return response()->json([
             'message' => $this->message,
-            'error_type' => 'QuizException'
+            'error_type' => 'UserException'
         ], $this->code);
     }
 }
+
